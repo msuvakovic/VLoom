@@ -39,10 +39,5 @@ public:
     Texture(Texture&& o) noexcept : id(o.id) { o.id = 0; }
     Texture& operator=(Texture&& o) noexcept { if (id) glDeleteTextures(1, &id); id = o.id; o.id = 0; return *this; }
 
-    void bind(GLenum unit = GL_TEXTURE0) const {
-        glActiveTexture(unit);
-        glBindTexture(GL_TEXTURE_2D, id);
-    }
-
     bool isValid() const { return id != 0; }
 };

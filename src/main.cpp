@@ -27,15 +27,18 @@
 static const int WIDTH  = 800;
 static const int HEIGHT = 600;
 
-static std::string exePath(const char* rel) {
-    namespace fs = std::filesystem;
+static std::filesystem::path exeDir() {
 #ifdef _WIN32
     wchar_t buf[MAX_PATH];
     GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    return (fs::path(buf).parent_path() / rel).string();
+    return std::filesystem::path(buf).parent_path();
 #else
-    return (fs::read_symlink("/proc/self/exe").parent_path() / rel).string();
+    return std::filesystem::read_symlink("/proc/self/exe").parent_path();
 #endif
+}
+
+static std::string exePath(const char* rel) {
+    return (exeDir() / rel).string();
 }
 
 
@@ -230,11 +233,18 @@ int main() {
         }
 
         if (!state.cursorLocked) {
-            ImGui::Begin("Stats", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+            // FPS overlay — always visible when cursor is unlocked
+            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.55f);
+            ImGui::Begin("##fps", nullptr,
+                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoInputs     | ImGuiWindowFlags_NoNav |
+                ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoBringToFrontOnFocus);
             ImGui::Text("FPS: %.1f  (%.2f ms)", ImGui::GetIO().Framerate,
                                                  1000.0f / ImGui::GetIO().Framerate);
+            ImGui::End();
 
-            ImGui::Separator();
+            ImGui::Begin("Scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
             ImGui::Text("UI Scale:");
             ImGui::SameLine();
             if (ImGui::Button(uiScaleNames[uiScaleIdx])) {
@@ -249,12 +259,162 @@ int main() {
             ImGui::Checkbox("Normal Mapping",     &state.useNormalMap);
 
             ImGui::Separator();
-            if (ImGui::Button("Save Scene")) {
-                SceneSerializer::save(exePath("scene.txt"), objects);
-            }
+            ImGui::Text("Scene");
+            ImGui::Separator();
+            static char        saveNameBuf[128] = "scene";
+            static char        loadNameBuf[128] = "scene";
+            static std::string sceneLoadError;
+
+            if (ImGui::Button("Save Scene"))
+                ImGui::OpenPopup("Save Scene##dlg");
             ImGui::SameLine();
-            if (ImGui::Button("Load Scene")) {
-                SceneSerializer::load(exePath("scene.txt"), meshCache, texCache, objects);
+            if (ImGui::Button("Load Scene"))
+                ImGui::OpenPopup("Load Scene##dlg");
+            if (!sceneLoadError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", sceneLoadError.c_str());
+
+            // Save dialog
+            if (ImGui::BeginPopupModal("Save Scene##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Filename (without .txt):");
+                ImGui::SetNextItemWidth(220.0f);
+                ImGui::InputText("##savename", saveNameBuf, sizeof(saveNameBuf));
+                ImGui::TextDisabled("Will save as: %s.txt", saveNameBuf);
+                ImGui::Spacing();
+                if (ImGui::Button("Save", ImVec2(100, 0))) {
+                    if (saveNameBuf[0] != '\0') {
+                        std::string fname = std::string(saveNameBuf) + ".txt";
+                        SceneSerializer::save(exePath(fname.c_str()), objects);
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(100, 0)))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            // Load dialog
+            if (ImGui::BeginPopupModal("Load Scene##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Available scenes (click to select):");
+                ImGui::BeginChild("##filelist", ImVec2(260, 120), true);
+                {
+                    try {
+                        for (auto& entry : std::filesystem::directory_iterator(exeDir())) {
+                            if (entry.path().extension() == ".txt") {
+                                std::string stem = entry.path().stem().string();
+                                if (ImGui::Selectable(stem.c_str())) {
+                                    strncpy(loadNameBuf, stem.c_str(), sizeof(loadNameBuf) - 1);
+                                    loadNameBuf[sizeof(loadNameBuf) - 1] = '\0';
+                                }
+                            }
+                        }
+                    } catch (...) {}
+                }
+                ImGui::EndChild();
+                ImGui::Spacing();
+                ImGui::Text("Filename (without .txt):");
+                ImGui::SetNextItemWidth(220.0f);
+                ImGui::InputText("##loadname", loadNameBuf, sizeof(loadNameBuf));
+                ImGui::Spacing();
+                if (ImGui::Button("Load", ImVec2(100, 0))) {
+                    if (loadNameBuf[0] != '\0') {
+                        std::string fname = std::string(loadNameBuf) + ".txt";
+                        sceneLoadError.clear();
+                        bool ok = SceneSerializer::load(exePath(fname.c_str()), meshCache, texCache, objects);
+                        if (!ok) {
+                            sceneLoadError = "File not found: " + fname;
+                        } else {
+                            std::string missing;
+                            for (auto& obj : objects) {
+                                if (obj.mesh && obj.mesh->vao == 0)
+                                    missing += "\n  " + obj.meshPath;
+                            }
+                            if (!missing.empty())
+                                sceneLoadError = "Missing FBX (objects won't render):" + missing;
+                        }
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(100, 0)))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            ImGui::Spacing();
+            if (ImGui::Button("Add Object"))
+                ImGui::OpenPopup("Add Object##dlg");
+
+            // Add Object dialog
+            if (ImGui::BeginPopupModal("Add Object##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                static char addFbxBuf[128]   = "";
+                static char addLabelBuf[64]  = "";
+
+                ImGui::Text("Select FBX:");
+                ImGui::BeginChild("##fbxlist", ImVec2(260, 150), true);
+                {
+                    try {
+                        for (auto& entry : std::filesystem::directory_iterator(exeDir())) {
+                            if (entry.path().extension() == ".fbx") {
+                                std::string fname = entry.path().filename().string();
+                                bool selected = (fname == addFbxBuf);
+                                if (ImGui::Selectable(fname.c_str(), selected)) {
+                                    strncpy(addFbxBuf, fname.c_str(), sizeof(addFbxBuf) - 1);
+                                    addFbxBuf[sizeof(addFbxBuf) - 1] = '\0';
+                                    std::string stem = entry.path().stem().string();
+                                    strncpy(addLabelBuf, stem.c_str(), sizeof(addLabelBuf) - 1);
+                                    addLabelBuf[sizeof(addLabelBuf) - 1] = '\0';
+                                }
+                            }
+                        }
+                    } catch (...) {}
+                }
+                ImGui::EndChild();
+
+                ImGui::Spacing();
+                ImGui::Text("Label:");
+                ImGui::SetNextItemWidth(220.0f);
+                ImGui::InputText("##addlabel", addLabelBuf, sizeof(addLabelBuf));
+
+                ImGui::Spacing();
+                bool noSelection = (addFbxBuf[0] == '\0');
+                if (noSelection) ImGui::BeginDisabled();
+                if (ImGui::Button("Add", ImVec2(100, 0))) {
+                    SceneObject obj;
+                    obj.meshPath = addFbxBuf;
+                    obj.texPath  = "bricks_color.jpg";
+                    {
+                        std::string base = addLabelBuf[0] ? addLabelBuf : obj.meshPath;
+                        obj.label = base;
+                        int suffix = 2;
+                        bool clash;
+                        do {
+                            clash = false;
+                            for (auto& existing : objects)
+                                if (existing.label == obj.label) { clash = true; break; }
+                            if (clash) obj.label = base + " " + std::to_string(suffix++);
+                        } while (clash);
+                    }
+                    obj.mesh     = &meshCache.get(exePath(obj.meshPath.c_str()));
+                    obj.tex      = &texCache.get(exePath(obj.texPath.c_str()));
+                    obj.pos      = player.position;
+                    obj.rot      = glm::vec3(90.0f, 0.0f, 0.0f);
+                    obj.scale    = glm::vec3(1.0f);
+                    obj.texTile  = 1.0f;
+                    obj.rebuildTransform();
+                    objects.push_back(std::move(obj));
+                    addFbxBuf[0]  = '\0';
+                    addLabelBuf[0] = '\0';
+                    ImGui::CloseCurrentPopup();
+                }
+                if (noSelection) ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+                    addFbxBuf[0]  = '\0';
+                    addLabelBuf[0] = '\0';
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
 
             ImGui::Separator();

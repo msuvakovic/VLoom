@@ -13,12 +13,11 @@
   ## File structure
   ```
   src/
-    main.cpp          # Window/GL init, GLFW callbacks, ImGui, main loop
-    Shader.hpp        # Shader class: fromFiles(), use(), setInt/Float/Vec3/Mat4()
+    main.cpp          # Window/GL init, GLFW callbacks, ImGui, main loop; exeDir()/exePath() helpers
+    Shader.hpp        # Shader class: fromFiles(), move-only RAII
     Mesh.hpp          # Mesh class: static load() via Assimp, draw(), AABB bounds, move-only
-    Entity.hpp        # Entity: DEAD — no longer used. Platform converted to SceneObject. Safe to delete.
     Player.hpp        # Player: WASD+jump+gravity+collision, eyePosition(), update(const SceneObject&)
-    Texture.hpp       # Texture class: static load() via stb_image, bind(unit), move-only RAII
+    Texture.hpp       # Texture class: static load() via stb_image, isValid(), move-only RAII
     Camera.hpp        # Camera: azimuth/elevation, mouse look update(), lookDir(), resetMouse()
     RenderDevice.hpp  # RenderDevice: GL state manager; bindShader/bindTexture (cached), clear, draw
     MeshCache.hpp     # MeshCache: loads each FBX once, returns stable const Mesh& (std::map)
@@ -42,7 +41,6 @@
         Bricks076A_1K-JPG_Roughness.jpg
     texture.png       # Generic texture at assets root (unused in code)
     Sample 1-5/       # Sample scene FBX files (one per subfolder)
-  grassblock.jpg      # Grassblock texture atlas (Minecraft-style, at project root, unused in code)
   CMakeLists.txt
   toolchain-mingw.cmake
   ```
@@ -68,12 +66,6 @@
   - Stores `boundsMin`/`boundsMax` in model-local space for AABB collision.
   - Vertex layout: `vec3 position, vec3 normal, vec2 uv` (stride = 8 floats), attribs 0, 1, 2.
 
-  ### Entity
-  - Holds `const Mesh&` (non-owning) + `glm::mat4 transform`.
-  - `draw(RenderDevice&)` — sets `u_Model` and calls `rd.drawMesh()`.
-  - `worldAABB()` transforms all 8 corners and returns `{wMin, wMax}`.
-  - The Mesh must outlive its Entity.
-
   ### RenderDevice
   - Thin stateful wrapper around raw OpenGL. One instance lives in `main()`.
   - `bindShader(shader)` — skips `glUseProgram` if `shader.id` already active.
@@ -85,7 +77,7 @@
 
   ### Texture
   - Move-only RAII. `static Texture::load(path)` via stb_image (y-flip on).
-  - `bind(unit)` wraps `glActiveTexture` + `glBindTexture`. `isValid()` checks `id != 0`.
+  - `isValid()` checks `id != 0`. Binding is handled exclusively by `RenderDevice::bindTexture()`.
 
   ### TextureCache
   - Exact same pattern as `MeshCache`: `std::map<string, Texture>`, returns stable `const Texture&`, deduplicates by path. `std::map` used so insertions never invalidate existing references.
@@ -110,7 +102,7 @@
   - INI-style format: `[object]` sections with `label`, `mesh`, `tex`, `pos`, `rot`, `scale`, `tile` fields.
   - Asset paths are basenames; resolved relative to the scene file's directory (= exe dir) on load.
   - Load clears `objects` and rebuilds from file. Ground platform is never saved (hardcoded in `main.cpp`).
-  - Save/Load buttons in the Tab panel above the object list.
+  - Returns `bool` — `false` if file not found; caller checks `mesh->vao == 0` per object to detect missing FBX.
 
   ### Camera
   - `Camera` owns: `azimuth`, `elevation`, `mouseSens` (public), and private `locked_`/`firstMouse_`/`lastX_`/`lastY_`.
@@ -134,13 +126,13 @@
   - Normal orientation: `geomN = normalize(vNormal) * (gl_FrontFacing ? 1.0 : -1.0)` — corrects for FBX winding without backface culling (assets use CW winding, so `glEnable(GL_CULL_FACE)` kills all geometry). Old upward-flip hack removed.
 
   ### Texture mapping modes (u_UseAffine)
-  - Toggled via **"Retro Texture Warp"** checkbox in the ImGui stats panel (Tab to open).
+  - Toggled via **"Retro Texture Warp"** checkbox in the ImGui Scene panel (Tab to open).
   - `u_UseAffine = false` (default): **object-space triplanar** — projects from all 3 model-space axes using `vModelPos`; blend weights derived from model-space geometric normal (`normalize(cross(dFdx(vModelPos), dFdy(vModelPos)))`). Both UVs and blend weights are in model space, so the texture is locked to the mesh and projects correctly on any face orientation regardless of world rotation.
   - `u_UseAffine = true`: **world-space XZ affine** — `vUV_Affine` is set to `vec2(vFragPos.x, vFragPos.z)` in the vertex shader (world-space XZ, not mesh UVs), interpolated without perspective correction (`noperspective`). The fragment shader samples with `fract(vUV_Affine * uTileSize)`. This gives a flat top-down projection with affine rasterization warp artifacts (not classic PS1 mesh-UV warping).
   - Both branches are resolved in the fragment shader only; `vUV_Affine` is always emitted by the vertex shader.
 
   ### Normal mapping (u_UseNormalMap)
-  - Toggled via **"Normal Mapping"** checkbox in the ImGui stats panel. On by default.
+  - Toggled via **"Normal Mapping"** checkbox in the ImGui Scene panel. On by default.
   - Only active in triplanar mode (no normal mapping in affine/retro mode).
   - **Triplanar normal mapping** — no per-vertex tangents needed. Each projection axis defines its own analytical TBN:
     - X-proj (UV=`.yz`): T=+Y, B=+Z, N=±X → model-space = `(b·sign, r, g)`
@@ -164,25 +156,39 @@
   - Release zip (`VLoom-windows.zip`) contains only runtime files: `cube_renderer.exe`, `bricks_color.jpg`, `bricks_normal.jpg`, `*.fbx`, `shaders/`, `THIRD_PARTY_LICENSES.txt`
   - Recreate the zip: `cd build-win && zip -r ../VLoom-windows.zip cube_renderer.exe bricks_color.jpg bricks_normal.jpg ground.fbx ramp1.fbx railing.fbx shaders/ ../THIRD_PARTY_LICENSES.txt`
 
+  ### ImGui UI layout (Tab to open)
+  - **FPS overlay** — frameless semi-transparent window pinned top-left (10,10); always visible when cursor is unlocked; `NoInputs` so it never intercepts clicks.
+  - **Scene window** — `AlwaysAutoResize`; sections top-to-bottom:
+    1. UI Scale toggle button
+    2. Separator → Retro Texture Warp + Normal Mapping checkboxes
+    3. Separator + "Scene" label + Separator → Save Scene / Load Scene buttons + red error text if last load failed
+    4. Add Object button
+    5. Separator → per-object collapsing headers (SceneEditor)
+  - **Save dialog** (`BeginPopupModal`) — text input for filename (no `.txt`), preview line, Save/Cancel.
+  - **Load dialog** — scrollable list of `.txt` files in exe dir (click to select), text input, Load/Cancel. On load failure shows red text: file-not-found or list of FBX basenames with `vao == 0`.
+  - **Add Object dialog** — scrollable list of `.fbx` files in exe dir (click highlights selection), label input (auto-filled from stem), Add (disabled until selection)/Cancel. New object spawns at `player.position`, `rot=(90,0,0)`, `scale=(1,1,1)`, `tex=bricks_color.jpg`. Duplicate labels get ` 2`, ` 3` suffix.
+
   ### Controls
   | Key | Action |
   |-----|--------|
   | WASD | Move |
   | Space | Jump |
   | Mouse | Look (FPS) |
-  | Tab | Toggle cursor lock / show ImGui stats panel |
+  | Tab | Toggle cursor lock / show ImGui Scene panel |
   | F1 | Wireframe debug mode (also prints pos/collision/grounded 1×/sec) |
   | Escape | Quit |
 
   ## Known/pending refactors
-  - **`Shader` dead methods**: `use()`, `setInt/Float/Vec3/Mat4` on `Shader` are unused — all uniform/bind calls go through `RenderDevice` now. Safe to strip.
-  - **`Texture::bind()` dead method**: `RenderDevice::bindTexture()` calls GL directly and does not delegate to `tex.bind()`, so `Texture::bind()` is unreachable in normal usage. Safe to remove.
   - **`RenderDevice::loc()` is uncached**: calls `glGetUniformLocation` on every uniform set, every frame. A per-shader `unordered_map<string, GLint>` cache would eliminate repeated string lookups.
+  - ~~**`Shader` dead methods**~~: removed — `use()`, `setInt/Float/Vec3/Mat4` stripped from `Shader.hpp`.
+  - ~~**`Texture::bind()` dead method**~~: removed from `Texture.hpp`.
+  - ~~**`Entity.hpp` dead file**~~: deleted.
   - ~~**No `TextureCache`**~~: implemented — `TextureCache.hpp`, `SceneObject::tex` is now a non-owning pointer.
-  - ~~**`Entity` vs `SceneObject` asymmetry**~~: resolved — platform converted to `SceneObject` with TRS (pos=(0,-1,-5), rot=(90,0,0)°, scale=(20,20,0.2)). `Entity.hpp` is now dead code.
+  - ~~**`Entity` vs `SceneObject` asymmetry**~~: resolved — platform converted to `SceneObject` with TRS (pos=(0,-1,-5), rot=(90,0,0)°, scale=(20,20,0.2)).
 
   ## Planned features (not yet started)
-  - ~~**Save/load scene**~~: implemented — `SceneSerializer.hpp`, INI-style `scene.txt` next to the exe. Save/Load buttons in the Tab panel. Stores label, meshPath, texPath, pos, rot, scale, tile per object. Ground platform is NOT saved (it's hardcoded collision floor).
+  - ~~**Save/load scene**~~: implemented — `SceneSerializer.hpp`, INI-style `.txt` next to the exe. Save/Load use file picker popups (lists `.txt` files in exe dir). Stores label, meshPath, texPath, pos, rot, scale, tile per object. Ground platform is NOT saved (hardcoded collision floor). Missing FBX reported as red error text in Scene panel.
+  - ~~**Add Object in-editor**~~: implemented — "Add Object" button opens FBX picker popup; spawns at player position with auto-numbered label if duplicate.
   - **Instanced rendering**: group SceneObjects by mesh path → `glDrawElementsInstanced`. Requires instance VBO with per-instance `mat4` (attribs 3–6, divisor=1) and a grouped render pass.
 
   ## Asset library (assets/Pieces/)
