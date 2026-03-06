@@ -16,6 +16,14 @@ Makefile
 # Unused assets
 assets/texture.png
 assets/Sample 1-5/
+assets/License.txt
+assets/*.url
+
+# FBX pieces — only keep the ones currently used in the build
+assets/Pieces/*.fbx
+!assets/Pieces/ground.fbx
+!assets/Pieces/ramp1.fbx
+!assets/Pieces/railing.fbx
 
 # IDE / OS
 .vscode/

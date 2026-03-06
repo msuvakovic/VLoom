@@ -53,5 +53,10 @@ cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=toolchain-mingw.cmake
 cmake --build build-win -j$(nproc)
 ```
 
+### Windows zip (important)
+```bash
+cd build-win && zip -r ../VLoom-windows.zip cube_renderer.exe bricks_color.jpg bricks_normal.jpg ground.fbx ramp1.fbx railing.fbx shaders/ ../THIRD_PARTY_LICENSES.txt
+```
+
 
 

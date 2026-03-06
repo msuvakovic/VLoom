@@ -161,8 +161,8 @@
   ### Windows distribution
   - Cross-compile from Linux: `cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=toolchain-mingw.cmake && cmake --build build-win -j$(nproc)`
   - MinGW runtime statically linked (`-static-libgcc -static-libstdc++`) — no `libstdc++` / `libgcc` DLLs needed.
-  - Release zip (`VLoom-windows.zip`) contains only runtime files: `cube_renderer.exe`, `bricks_color.jpg`, `bricks_normal.jpg`, `*.fbx`, `shaders/`
-  - Recreate the zip: `cd build-win && zip -r ../VLoom-windows.zip cube_renderer.exe bricks_color.jpg bricks_normal.jpg ground.fbx ramp1.fbx railing.fbx shaders/`
+  - Release zip (`VLoom-windows.zip`) contains only runtime files: `cube_renderer.exe`, `bricks_color.jpg`, `bricks_normal.jpg`, `*.fbx`, `shaders/`, `THIRD_PARTY_LICENSES.txt`
+  - Recreate the zip: `cd build-win && zip -r ../VLoom-windows.zip cube_renderer.exe bricks_color.jpg bricks_normal.jpg ground.fbx ramp1.fbx railing.fbx shaders/ ../THIRD_PARTY_LICENSES.txt`
 
   ### Controls
   | Key | Action |
