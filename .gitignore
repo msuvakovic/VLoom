@@ -1,0 +1,25 @@
+# Build output
+build/
+build-win/
+
+# Release zips
+*.zip
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_*
+
+# Unused assets
+assets/texture.png
+assets/Sample 1-5/
+
+# IDE / OS
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
